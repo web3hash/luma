@@ -1,0 +1,100 @@
+services:
+  nginx:
+    container_name: luma.nginx
+    build:
+      context: .
+      dockerfile: ./docker/nginx.docker
+    restart: unless-stopped
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '${APP_PORT:-80}:80'
+    volumes:
+      - ./app:/var/www
+    depends_on:
+      php-fpm:
+        condition: service_started
+
+  php-fpm:
+    container_name: luma.fpm
+    build:
+      context: .
+      dockerfile: ./docker/php-fpm.docker
+    volumes:
+      - ./app:/var/www/
+      - ./docker/php.ini:/usr/local/etc/php/php.ini
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  php-cli:
+    container_name: luma.cli
+    build:
+      context: .
+      dockerfile: ./docker/php-cli.docker
+    volumes:
+      - ./app:/var/www
+      - ./docker/php.ini:/usr/local/etc/php/php.ini
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    tty: true
+
+  mysql:
+    image: arm64v8/mysql:8.0.30
+    container_name: luma.db
+    restart: unless-stopped
+    tty: true
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-luma}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+      SERVICE_NAME: mysql
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "${PORT_MYSQL:-3306}:3306"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h localhost -uroot -p"$$MYSQL_ROOT_PASSWORD" --silent
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  node:
+    image: arm64v8/node:22.21.1-alpine
+    container_name: luma.node
+    ports:
+      - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
+    volumes:
+      - ./app:/var/www/app
+    working_dir: /var/www/app
+    tty: true
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: luma.mailpit
+    restart: unless-stopped
+    ports:
+      - "${PORT_MAILPIT_SMTP:-1025}:1025"
+      - "${PORT_MAILPIT_WEB:-8025}:8025"
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  redis_data:

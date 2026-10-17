@@ -1,0 +1,32 @@
+FROM php:8.4-cli
+
+RUN apt-get update \
+  && apt-get upgrade -y \
+  && apt-get install -y --no-install-recommends \
+  unzip \
+  libzip-dev \
+  zip \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get install -y \
+  libzip-dev \
+  zip \
+  && docker-php-ext-install zip
+
+RUN apt-get update && docker-php-ext-install mysqli pdo_mysql pcntl
+
+RUN docker-php-ext-enable zip
+
+ADD https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+
+RUN chmod +x /usr/local/bin/install-php-extensions
+
+RUN install-php-extensions gd
+
+
+
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/bin --filename=composer --quiet
+
+ENV COMPOSER_ALLOW_SUPERUSER 1
+
+WORKDIR /var/www

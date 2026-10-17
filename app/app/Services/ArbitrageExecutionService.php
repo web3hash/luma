@@ -1,0 +1,249 @@
+<?php
+
+namespace App\Services;
+
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Redis;
+use Illuminate\Http\Client\Response;
+use RuntimeException;
+
+class ArbitrageExecutionService
+{
+    public function execute(string $pair, string $direction, float $quantity): array
+    {
+        if ($quantity <= 0) {
+            throw new RuntimeException('Trade quantity must be greater than zero.');
+        }
+
+        [$buyExchange, $sellExchange] = str_contains($direction, 'Binance')
+            ? ['binance', 'kraken']
+            : ['kraken', 'binance'];
+
+        $key = 'market:execution:' . sha1($pair . ':' . $direction);
+        $cooldown = (int) config('spreadradar.execution_cooldown_seconds', 10);
+        if ($cooldown > 0 && !Redis::set($key, (string) microtime(true), 'EX', $cooldown, 'NX')) {
+            throw new RuntimeException('The same arbitrage route was executed recently.');
+        }
+
+        try {
+            $buy = $this->marketOrder($buyExchange, $pair, 'BUY', $quantity);
+            $sell = $this->marketOrder($sellExchange, $pair, 'SELL', $quantity);
+        } catch (\Throwable $e) {
+            Log::channel('profitable_trades')->error('Arbitrage execution failed', [
+                'pair' => $pair,
+                'direction' => $direction,
+                'quantity' => $quantity,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+
+        $realized = $this->realizedProfit($buy, $sell);
+
+        Log::channel('profitable_trades')->info('Arbitrage executed', [
+            'pair' => $pair,
+            'direction' => $direction,
+            'quantity' => $quantity,
+            'buy_order' => $buy,
+            'sell_order' => $sell,
+            'realized' => $realized,
+        ]);
+
+        return ['buy' => $buy, 'sell' => $sell, 'realized' => $realized];
+    }
+
+    private function marketOrder(string $exchange, string $pair, string $side, float $quantity): array
+    {
+        return match ($exchange) {
+            'binance' => $this->binanceOrder($pair, $side, $quantity),
+            'kraken' => $this->krakenOrder($pair, $side, $quantity),
+            default => throw new RuntimeException('Unsupported exchange.'),
+        };
+    }
+
+    private function binanceOrder(string $pair, string $side, float $quantity): array
+    {
+        $this->guardRateLimit('binance');
+        $params = [
+            'symbol' => str_replace('/', '', strtoupper($pair)),
+            'side' => $side,
+            'type' => 'MARKET',
+            'quantity' => rtrim(rtrim(number_format($quantity, 8, '.', ''), '0'), '.'),
+            'recvWindow' => 5000,
+            'timestamp' => (int) round(microtime(true) * 1000),
+        ];
+        $query = http_build_query($params);
+        $params['signature'] = hash_hmac('sha256', $query, (string) config('services.binance.api_secret'));
+
+        $response = Http::withHeaders(['X-MBX-APIKEY' => (string) config('services.binance.api_key')])
+            ->post('https://api.binance.com/api/v3/order', $params);
+        $this->observeResponse('binance', '/api/v3/order', $response);
+        $order = $response->throw()->json();
+
+        $executed = (float) ($order['executedQty'] ?? 0);
+        $cost = (float) ($order['cummulativeQuoteQty'] ?? 0);
+        return $this->orderFill($executed, $cost, $this->binanceFee($order));
+    }
+
+    private function krakenOrder(string $pair, string $side, float $quantity): array
+    {
+        $this->guardRateLimit('kraken');
+        $path = '/0/private/AddOrder';
+        $nonce = (string) floor(microtime(true) * 1_000_000);
+        $data = [
+            'nonce' => $nonce,
+            'ordertype' => 'market',
+            'type' => strtolower($side),
+            'volume' => rtrim(rtrim(number_format($quantity, 8, '.', ''), '0'), '.'),
+            'pair' => $this->krakenPair($pair),
+        ];
+        $post = http_build_query($data);
+        $signature = base64_encode(hash_hmac(
+            'sha512', $path . hash('sha256', $nonce . $post, true),
+            base64_decode((string) config('services.kraken.api_secret'), true), true
+        ));
+        $response = Http::asForm()->withHeaders([
+            'API-Key' => (string) config('services.kraken.api_key'),
+            'API-Sign' => $signature,
+        ])->post('https://api.kraken.com' . $path, $data);
+        $this->observeResponse('kraken', $path, $response);
+        $response = $response->throw()->json();
+
+        if (!empty($response['error'])) {
+            throw new RuntimeException(implode(', ', $response['error']));
+        }
+
+        $txid = $response['result']['txid'][0] ?? null;
+        if (!is_string($txid)) {
+            throw new RuntimeException('Kraken did not return a transaction id.');
+        }
+
+        // AddOrder returns an acknowledgement; QueryOrders contains the actual fill.
+        usleep(250000);
+        $order = $this->krakenQueryOrder($txid);
+        $executed = (float) ($order['vol_exec'] ?? 0);
+        $cost = (float) ($order['cost'] ?? 0);
+        return $this->orderFill($executed, $cost, (float) ($order['fee'] ?? 0));
+    }
+
+    private function krakenPair(string $pair): string
+    {
+        [$base] = explode('/', strtoupper($pair), 2);
+        $quote = strtoupper((string) config('spreadradar.kraken_quote_asset', 'USD'));
+
+        return match ($base) {
+            'BTC', 'XBT', 'XXBT' => 'XBT' . $quote,
+            'ETH', 'XETH' => 'ETH' . $quote,
+            default => $base . $quote,
+        };
+    }
+
+    private function orderFill(float $quantity, float $cost, float $fee): array
+    {
+        if ($quantity <= 0 || $cost <= 0) {
+            throw new RuntimeException('Exchange returned an order without a completed fill.');
+        }
+
+        return [
+            'executed_quantity' => $quantity,
+            'quote_amount' => $cost,
+            'fee_quote' => $fee,
+            'average_price' => $cost / $quantity,
+        ];
+    }
+
+    private function realizedProfit(array $buy, array $sell): array
+    {
+        $quantity = min($buy['executed_quantity'], $sell['executed_quantity']);
+        $buyAmount = $buy['average_price'] * $quantity + $buy['fee_quote'];
+        $sellAmount = $sell['average_price'] * $quantity - $sell['fee_quote'];
+        $profit = $sellAmount - $buyAmount;
+
+        return [
+            'quantity' => $quantity,
+            'buy_amount' => $buyAmount,
+            'sell_amount' => $sellAmount,
+            'profit_quote' => $profit,
+            'profit_percent' => $buyAmount > 0 ? $profit / $buyAmount * 100 : 0,
+        ];
+    }
+
+    private function binanceFee(array $order): float
+    {
+        $fee = 0.0;
+        foreach ($order['fills'] ?? [] as $fill) {
+            if (!is_array($fill) || !is_numeric($fill['commission'] ?? null)) {
+                continue;
+            }
+            $commission = (float) $fill['commission'];
+            // Binance charges buys in base asset and sells in quote asset.
+            $fee += strtoupper((string) ($fill['commissionAsset'] ?? '')) ===
+                strtoupper((string) config('spreadradar.binance_quote_asset', 'USDT'))
+                ? $commission
+                : $commission * (float) ($fill['price'] ?? 0);
+        }
+        return $fee;
+    }
+
+    private function krakenQueryOrder(string $txid): array
+    {
+        $path = '/0/private/QueryOrders';
+        $nonce = (string) floor(microtime(true) * 1_000_000);
+        $data = ['nonce' => $nonce, 'txid' => $txid];
+        $post = http_build_query($data);
+        $signature = base64_encode(hash_hmac(
+            'sha512', $path . hash('sha256', $nonce . $post, true),
+            base64_decode((string) config('services.kraken.api_secret'), true), true
+        ));
+        $this->guardRateLimit('kraken');
+        $response = Http::asForm()->withHeaders([
+            'API-Key' => (string) config('services.kraken.api_key'),
+            'API-Sign' => $signature,
+        ])->post('https://api.kraken.com' . $path, $data);
+        $this->observeResponse('kraken', $path, $response);
+        $response = $response->throw()->json();
+
+        if (!empty($response['error'])) {
+            throw new RuntimeException(implode(', ', $response['error']));
+        }
+        return $response['result'][$txid] ?? throw new RuntimeException('Kraken order details unavailable.');
+    }
+
+    private function guardRateLimit(string $exchange): void
+    {
+        $limit = (int) config("spreadradar.api_limits.{$exchange}.requests_per_minute", 60);
+        if ($limit <= 0) {
+            return;
+        }
+
+        $key = "market:api-rate:{$exchange}:" . now()->format('YmdHi');
+        $count = (int) Redis::incr($key);
+        Redis::expire($key, 70);
+
+        if ($count > $limit) {
+            throw new RuntimeException("{$exchange} local API rate limit reached ({$limit}/min).");
+        }
+    }
+
+    private function observeResponse(string $exchange, string $endpoint, Response $response): void
+    {
+        $fields = [
+            'exchange' => $exchange,
+            'endpoint' => $endpoint,
+            'status' => $response->status(),
+        ];
+
+        foreach ([
+            'X-MBX-USED-WEIGHT-1M' => 'binance_used_weight_1m',
+            'X-MBX-ORDER-COUNT-10S' => 'binance_order_count_10s',
+            'X-MBX-ORDER-COUNT-1D' => 'binance_order_count_1d',
+        ] as $header => $name) {
+            if ($response->header($header) !== null) {
+                $fields[$name] = $response->header($header);
+            }
+        }
+
+        Log::channel('profitable_trades')->info('Exchange API usage', $fields);
+    }
+}
