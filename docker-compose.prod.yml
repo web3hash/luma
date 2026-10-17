@@ -23,6 +23,19 @@ services:
       redis:
         condition: service_healthy
 
+  php-cli:
+    build:
+      context: .
+      dockerfile: ./docker/php-cli.docker
+    restart: "no"
+    working_dir: /var/www
+    volumes:
+      - ./app:/var/www
+      - ./docker/php.ini:/usr/local/etc/php/php.ini:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
   market-data:
     build:
       context: .

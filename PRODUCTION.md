@@ -15,9 +15,10 @@ Build and initialize Laravel:
 
 ```bash
 docker compose -f docker-compose.prod.yml build
-docker compose -f docker-compose.prod.yml run --rm php-fpm php artisan key:generate
-docker compose -f docker-compose.prod.yml run --rm php-fpm php artisan storage:link
-docker compose -f docker-compose.prod.yml run --rm php-fpm php artisan config:cache
+docker compose -f docker-compose.prod.yml run --rm php-cli composer install --no-dev --optimize-autoloader
+docker compose -f docker-compose.prod.yml run --rm php-cli php artisan key:generate
+docker compose -f docker-compose.prod.yml run --rm php-cli php artisan storage:link
+docker compose -f docker-compose.prod.yml run --rm php-cli php artisan config:cache
 ```
 
 Start the web application and market-data worker first:
@@ -30,8 +31,8 @@ docker compose -f docker-compose.prod.yml logs -f market-data
 Check balances and signals before enabling live orders:
 
 ```bash
-docker compose -f docker-compose.prod.yml run --rm php-fpm php artisan market:refresh-balances
-docker compose -f docker-compose.prod.yml run --rm php-fpm php artisan market:calculate-spreads --once
+docker compose -f docker-compose.prod.yml run --rm php-cli php artisan market:refresh-balances
+docker compose -f docker-compose.prod.yml run --rm php-cli php artisan market:calculate-spreads --once
 ```
 
 The calculator starts in signal-only mode by default. Enable live execution
