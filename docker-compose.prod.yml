@@ -3,7 +3,7 @@ services:
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-80}:80"
+      - "127.0.0.1:${APP_PORT:-8080}:80"
     volumes:
       - ./app:/var/www:ro
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro

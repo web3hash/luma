@@ -11,6 +11,11 @@ Set `APP_ENV=production`, `APP_DEBUG=false`, `CACHE_STORE=redis`,
 `SESSION_DRIVER=file`, `REDIS_HOST=redis`, and the exchange credentials in
 `app/.env`. Keep this file on the server and never commit it.
 
+The production Compose file publishes the application Nginx only on
+`127.0.0.1:8080`. Put the public domain in the existing host Nginx and proxy
+that virtual host to `http://127.0.0.1:8080` so other sites can keep using
+ports 80 and 443.
+
 Build and initialize Laravel:
 
 ```bash
