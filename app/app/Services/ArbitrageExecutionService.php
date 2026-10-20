@@ -196,7 +196,7 @@ class ArbitrageExecutionService
     {
         $this->guardRateLimit('kraken');
         $path = '/0/private/AddOrder';
-        $nonce = (string) floor(microtime(true) * 1_000_000);
+        $nonce = $this->nextKrakenNonce();
         $data = [
             'nonce' => $nonce,
             'ordertype' => 'market',
@@ -305,7 +305,7 @@ class ArbitrageExecutionService
     private function krakenQueryOrder(string $txid): array
     {
         $path = '/0/private/QueryOrders';
-        $nonce = (string) floor(microtime(true) * 1_000_000);
+        $nonce = $this->nextKrakenNonce();
         $data = ['nonce' => $nonce, 'txid' => $txid];
         $post = http_build_query($data);
         $signature = base64_encode(hash_hmac(
@@ -318,7 +318,17 @@ class ArbitrageExecutionService
             'API-Sign' => $signature,
         ])->post('https://api.kraken.com' . $path, $data);
         $this->observeResponse('kraken', $path, $response);
-        $response = $response->throw()->json();
+        $payload = $response->json();
+
+        if (!$response->successful()) {
+            throw new RuntimeException(sprintf(
+                'Kraken HTTP %d: %s',
+                $response->status(),
+                is_array($payload) ? json_encode($payload, JSON_UNESCAPED_UNICODE) : $response->body()
+            ));
+        }
+
+        $response = is_array($payload) ? $payload : [];
 
         if (!empty($response['error'])) {
             throw new RuntimeException(implode(', ', $response['error']));
@@ -361,5 +371,16 @@ class ArbitrageExecutionService
         }
 
         Log::channel('profitable_trades')->info('Exchange API usage', $fields);
+    }
+
+    private function nextKrakenNonce(): string
+    {
+        $key = 'market:kraken:nonce';
+        $now = (int) floor(microtime(true) * 1_000_000);
+        $last = (int) (Redis::get($key) ?: 0);
+        $nonce = max($now, $last + 1);
+        Redis::set($key, (string) $nonce);
+
+        return (string) $nonce;
     }
 }
