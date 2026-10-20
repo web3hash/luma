@@ -56,7 +56,7 @@ class ArbitrageExecutionService
             throw new RuntimeException('Trade quantity must be greater than zero.');
         }
 
-        [$buyExchange, $sellExchange] = str_contains($direction, 'Binance')
+        [$buyExchange, $sellExchange] = str_starts_with($direction, 'Binance')
             ? ['binance', 'kraken']
             : ['kraken', 'binance'];
 
