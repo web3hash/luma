@@ -111,7 +111,8 @@ class ArbitrageExecutionService
         $query = http_build_query($params);
         $params['signature'] = hash_hmac('sha256', $query, (string) config('services.binance.api_secret'));
 
-        $response = Http::withHeaders(['X-MBX-APIKEY' => (string) config('services.binance.api_key')])
+        $response = Http::asForm()
+            ->withHeaders(['X-MBX-APIKEY' => (string) config('services.binance.api_key')])
             ->post('https://api.binance.com/api/v3/order', $params);
         $this->observeResponse('binance', '/api/v3/order', $response);
         $order = $response->throw()->json();
