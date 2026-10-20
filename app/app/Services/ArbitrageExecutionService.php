@@ -100,8 +100,10 @@ class ArbitrageExecutionService
     private function binanceOrder(string $pair, string $side, float $quantity): array
     {
         $this->guardRateLimit('binance');
+        $symbol = str_replace('/', '', strtoupper($pair));
+        $quantity = $this->normalizeBinanceQuantity($symbol, $quantity);
         $params = [
-            'symbol' => str_replace('/', '', strtoupper($pair)),
+            'symbol' => $symbol,
             'side' => $side,
             'type' => 'MARKET',
             'quantity' => rtrim(rtrim(number_format($quantity, 8, '.', ''), '0'), '.'),
@@ -120,6 +122,37 @@ class ArbitrageExecutionService
         $executed = (float) ($order['executedQty'] ?? 0);
         $cost = (float) ($order['cummulativeQuoteQty'] ?? 0);
         return $this->orderFill($executed, $cost, $this->binanceFee($order));
+    }
+
+    private function normalizeBinanceQuantity(string $symbol, float $quantity): float
+    {
+        $response = Http::get('https://api.binance.com/api/v3/exchangeInfo', [
+            'symbol' => $symbol,
+        ])->throw()->json();
+
+        $filters = $response['symbols'][0]['filters'] ?? [];
+        $lotSize = collect($filters)->firstWhere('filterType', 'LOT_SIZE');
+
+        if (!is_array($lotSize) || (float) ($lotSize['stepSize'] ?? 0) <= 0) {
+            throw new RuntimeException("Binance LOT_SIZE rules unavailable for {$symbol}.");
+        }
+
+        $stepSize = (float) $lotSize['stepSize'];
+        $minQuantity = (float) ($lotSize['minQty'] ?? $stepSize);
+        $normalized = floor(($quantity + 1e-12) / $stepSize) * $stepSize;
+        $normalized = round($normalized, 12);
+
+        if ($normalized < $minQuantity) {
+            throw new RuntimeException(sprintf(
+                'Quantity %.12f is below Binance minimum %.12f for %s (step %.12f).',
+                $quantity,
+                $minQuantity,
+                $symbol,
+                $stepSize
+            ));
+        }
+
+        return $normalized;
     }
 
     private function krakenOrder(string $pair, string $side, float $quantity): array
