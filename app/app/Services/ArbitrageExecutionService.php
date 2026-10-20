@@ -23,7 +23,7 @@ class ArbitrageExecutionService
         ]);
 
         try {
-            $result = $this->execute($pair, $direction, $quantity);
+            $result = $this->execute($pair, $direction, $quantity, false);
         } catch (\Throwable $e) {
             Log::channel('profitable_trades')->error('Transaction test failed', [
                 'pair' => $pair,
@@ -45,7 +45,12 @@ class ArbitrageExecutionService
         return $result;
     }
 
-    public function execute(string $pair, string $direction, float $quantity): array
+    public function execute(
+        string $pair,
+        string $direction,
+        float $quantity,
+        bool $respectCooldown = true
+    ): array
     {
         if ($quantity <= 0) {
             throw new RuntimeException('Trade quantity must be greater than zero.');
@@ -57,7 +62,7 @@ class ArbitrageExecutionService
 
         $key = 'market:execution:' . sha1($pair . ':' . $direction);
         $cooldown = (int) config('luma.execution_cooldown_seconds', 10);
-        if ($cooldown > 0 && !Redis::set($key, (string) microtime(true), 'EX', $cooldown, 'NX')) {
+        if ($respectCooldown && $cooldown > 0 && !Redis::set($key, (string) microtime(true), 'EX', $cooldown, 'NX')) {
             throw new RuntimeException('The same arbitrage route was executed recently.');
         }
 
@@ -65,6 +70,10 @@ class ArbitrageExecutionService
             $buy = $this->marketOrder($buyExchange, $pair, 'BUY', $quantity);
             $sell = $this->marketOrder($sellExchange, $pair, 'SELL', $quantity);
         } catch (\Throwable $e) {
+            // A failed attempt must not prevent an immediate retry.
+            if ($respectCooldown) {
+                Redis::del($key);
+            }
             Log::channel('profitable_trades')->error('Arbitrage execution failed', [
                 'pair' => $pair,
                 'direction' => $direction,
@@ -150,6 +159,34 @@ class ArbitrageExecutionService
                 $symbol,
                 $stepSize
             ));
+        }
+
+        $notionalFilter = collect($filters)->first(
+            static fn (array $filter): bool => in_array(
+                $filter['filterType'] ?? '',
+                ['NOTIONAL', 'MIN_NOTIONAL'],
+                true
+            )
+        );
+
+        if (is_array($notionalFilter) && (float) ($notionalFilter['minNotional'] ?? 0) > 0) {
+            $price = (float) Http::get('https://api.binance.com/api/v3/ticker/price', [
+                'symbol' => $symbol,
+            ])->throw()->json('price');
+            $notional = $normalized * $price;
+            $minimum = (float) $notionalFilter['minNotional'];
+
+            if ($notional < $minimum) {
+                $required = ceil(($minimum / max($price, PHP_FLOAT_EPSILON)) / $stepSize) * $stepSize;
+                throw new RuntimeException(sprintf(
+                    'Quantity %.12f for %s is below Binance minimum notional %.8f (current %.8f). Use at least %.12f.',
+                    $normalized,
+                    $symbol,
+                    $minimum,
+                    $notional,
+                    round($required, 12)
+                ));
+            }
         }
 
         return $normalized;
