@@ -43,7 +43,7 @@ class RefreshBalances extends Command
         }
 
         $feeRows = [];
-        foreach (config('spreadradar.pairs', []) as $pair) {
+        foreach (config('luma.pairs', []) as $pair) {
             foreach (['binance', 'kraken'] as $exchange) {
                 try {
                     $fee = $feeService->get($exchange, $pair);

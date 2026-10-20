@@ -19,7 +19,7 @@ class ExchangeBalanceService
         }
 
         $cached = json_decode($raw, true);
-        $maxAge = (int) config('spreadradar.balance_refresh_seconds', 60) * 2;
+        $maxAge = (int) config('luma.balance_refresh_seconds', 60) * 2;
 
         if (!is_array($cached)
             || !isset($cached['fetched_at'], $cached['balances'])
@@ -50,7 +50,7 @@ class ExchangeBalanceService
     public function fresh(string $exchange): ?array
     {
         $balances = $this->balances($exchange);
-        $refresh = (int) config('spreadradar.balance_refresh_seconds', 60);
+        $refresh = (int) config('luma.balance_refresh_seconds', 60);
 
         $raw = Redis::get(self::CACHE_PREFIX . $exchange);
         $cached = is_string($raw) ? json_decode($raw, true) : null;
@@ -130,7 +130,7 @@ class ExchangeBalanceService
 
     private function applyReserve(array $balances): array
     {
-        $factor = 1 - ((float) config('spreadradar.reserve_percent', 10) / 100);
+        $factor = 1 - ((float) config('luma.reserve_percent', 10) / 100);
         return array_map(static fn (float $value): float => max(0, $value * $factor), $balances);
     }
 

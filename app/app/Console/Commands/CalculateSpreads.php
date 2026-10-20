@@ -26,7 +26,7 @@ class CalculateSpreads extends Command
         ArbitrageExecutionService $executionService
     ): int
     {
-        $pairs = config('spreadradar.pairs', []);
+        $pairs = config('luma.pairs', []);
 
         if (!is_array($pairs) || $pairs === []) {
             $this->error('No currency pairs configured.');
@@ -35,22 +35,22 @@ class CalculateSpreads extends Command
         }
 
         $threshold = (float)config(
-            'spreadradar.min_net_spread_pct',
+            'luma.min_net_spread_pct',
             0.3
         );
 
         $maxAge = (float)config(
-            'spreadradar.max_quote_age_seconds',
+            'luma.max_quote_age_seconds',
             5
         );
 
         $interval = max(
             1,
-            (int)config('spreadradar.refresh_seconds', 2)
+            (int)config('luma.refresh_seconds', 2)
         );
 
-        $capital = (float) config('spreadradar.capital_usdt', 100);
-        $showAllPairs = (bool) config('spreadradar.show_all_pairs', false);
+        $capital = (float) config('luma.capital_usdt', 100);
+        $showAllPairs = (bool) config('luma.show_all_pairs', false);
         if ($capital <= 0) {
             $this->error('Capital must be greater than zero.');
             return self::FAILURE;
@@ -60,12 +60,12 @@ class CalculateSpreads extends Command
             $threshold < 0
             || $maxAge <= 0
         ) {
-            $this->error('Invalid SpreadRadar configuration.');
+            $this->error('Invalid Luma configuration.');
 
             return self::FAILURE;
         }
 
-        $this->info('SpreadRadar spread calculator started.');
+        $this->info('Luma spread calculator started.');
         $this->line(sprintf(
             'Fees: account-specific taker fees | Signal threshold: %.3f%% | Balance check: %s',
             $threshold,
@@ -86,8 +86,8 @@ class CalculateSpreads extends Command
                 $binanceFeeForPair = $feeService->get('binance', $pair);
                 $krakenFeeForPair = $feeService->get('kraken', $pair);
                 [$base, $quote] = explode('/', $pair, 2);
-                $binanceQuote = config('spreadradar.binance_quote_asset');
-                $krakenQuote = config('spreadradar.kraken_quote_asset');
+                $binanceQuote = config('luma.binance_quote_asset');
+                $krakenQuote = config('luma.kraken_quote_asset');
                 $binanceBuyBalance = $showAllPairs
                     ? $capital
                     : ($binanceBalances[$binanceQuote] ?? null);

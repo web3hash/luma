@@ -89,7 +89,7 @@ class ExchangeFeeService
     private function binance(): array
     {
         $fees = [];
-        foreach (config('spreadradar.pairs', []) as $pair) {
+        foreach (config('luma.pairs', []) as $pair) {
             $query = http_build_query([
                 'symbol' => str_replace('/', '', $pair),
                 'timestamp' => (int) round(microtime(true) * 1000),
@@ -121,7 +121,7 @@ class ExchangeFeeService
         }
 
         $fees = [];
-        foreach (config('spreadradar.pairs', []) as $pair) {
+        foreach (config('luma.pairs', []) as $pair) {
             [$base, $sourceQuote] = array_pad(
                 explode('/', strtoupper($pair), 2),
                 2,
@@ -129,7 +129,7 @@ class ExchangeFeeService
             );
             $wanted = array_unique(array_filter([
                 $this->normalizeKrakenPair(
-                    $base . config('spreadradar.kraken_quote_asset')
+                    $base . config('luma.kraken_quote_asset')
                 ),
                 $sourceQuote === null
                     ? null

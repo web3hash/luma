@@ -26,7 +26,7 @@ class WatchMarketData extends Command
 
     public function handle(): int
     {
-        $pairs = config('spreadradar.pairs', []);
+        $pairs = config('luma.pairs', []);
 
         if (!is_array($pairs) || $pairs === []) {
             $this->error('No currency pairs configured.');
@@ -78,7 +78,7 @@ class WatchMarketData extends Command
          * Binance: combined bookTicker stream.
          */
         $binanceUrl = config(
-            'spreadradar.binance_websocket_url'
+            'luma.binance_websocket_url'
         ) . '?streams='
             . implode('/', array_map(
                 fn(string $symbol) => strtolower($symbol) . '@bookTicker',
@@ -145,7 +145,7 @@ class WatchMarketData extends Command
         /*
          * Kraken: WebSocket v2 ticker channel.
          */
-        $krakenUrl = config('spreadradar.kraken_websocket_url');
+        $krakenUrl = config('luma.kraken_websocket_url');
 
         $krakenFuture = async(function () use (
             $krakenUrl,
@@ -261,7 +261,7 @@ class WatchMarketData extends Command
         });
 
         $this->info(
-            'SpreadRadar market watcher started. Press Ctrl+C to stop.'
+            'Luma market watcher started. Press Ctrl+C to stop.'
         );
 
         await([
@@ -299,7 +299,7 @@ class WatchMarketData extends Command
         foreach ($pairs as $pair) {
             [$base] = explode('/', strtoupper($pair), 2);
             $key = $this->normalizePair(
-                $base . '/' . config('spreadradar.kraken_quote_asset')
+                $base . '/' . config('luma.kraken_quote_asset')
             );
 
             if (isset($available[$key])) {
@@ -328,7 +328,7 @@ class WatchMarketData extends Command
         [$base] = explode('/', strtoupper($pair), 2);
 
         return $this->normalizePair(
-            $base . '/' . config('spreadradar.binance_quote_asset')
+            $base . '/' . config('luma.binance_quote_asset')
         );
     }
 }

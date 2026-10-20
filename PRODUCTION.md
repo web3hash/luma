@@ -44,7 +44,7 @@ The calculator starts in signal-only mode by default. Enable live execution
 only after the checks above:
 
 ```bash
-SPREADRADAR_EXECUTE_FLAG=--execute docker compose -f docker-compose.prod.yml up -d spread-calculator
+LUMA_EXECUTE_FLAG=--execute docker compose -f docker-compose.prod.yml up -d spread-calculator
 ```
 
 For automatic restart after a server reboot, enable Docker and use:

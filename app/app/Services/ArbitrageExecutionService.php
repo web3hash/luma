@@ -10,6 +10,41 @@ use RuntimeException;
 
 class ArbitrageExecutionService
 {
+    /**
+     * Execute both legs of a route and mark it as a transaction test.
+     * The caller is responsible for selecting a deliberately small quantity.
+     */
+    public function test(string $pair, string $direction, float $quantity): array
+    {
+        Log::channel('profitable_trades')->info('Transaction test started', [
+            'pair' => $pair,
+            'direction' => $direction,
+            'quantity' => $quantity,
+        ]);
+
+        try {
+            $result = $this->execute($pair, $direction, $quantity);
+        } catch (\Throwable $e) {
+            Log::channel('profitable_trades')->error('Transaction test failed', [
+                'pair' => $pair,
+                'direction' => $direction,
+                'quantity' => $quantity,
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+            throw $e;
+        }
+
+        Log::channel('profitable_trades')->info('Transaction test succeeded', [
+            'pair' => $pair,
+            'direction' => $direction,
+            'quantity' => $quantity,
+            'realized' => $result['realized'],
+        ]);
+
+        return $result;
+    }
+
     public function execute(string $pair, string $direction, float $quantity): array
     {
         if ($quantity <= 0) {
@@ -21,7 +56,7 @@ class ArbitrageExecutionService
             : ['kraken', 'binance'];
 
         $key = 'market:execution:' . sha1($pair . ':' . $direction);
-        $cooldown = (int) config('spreadradar.execution_cooldown_seconds', 10);
+        $cooldown = (int) config('luma.execution_cooldown_seconds', 10);
         if ($cooldown > 0 && !Redis::set($key, (string) microtime(true), 'EX', $cooldown, 'NX')) {
             throw new RuntimeException('The same arbitrage route was executed recently.');
         }
@@ -130,7 +165,7 @@ class ArbitrageExecutionService
     private function krakenPair(string $pair): string
     {
         [$base] = explode('/', strtoupper($pair), 2);
-        $quote = strtoupper((string) config('spreadradar.kraken_quote_asset', 'USD'));
+        $quote = strtoupper((string) config('luma.kraken_quote_asset', 'USD'));
 
         return match ($base) {
             'BTC', 'XBT', 'XXBT' => 'XBT' . $quote,
@@ -179,7 +214,7 @@ class ArbitrageExecutionService
             $commission = (float) $fill['commission'];
             // Binance charges buys in base asset and sells in quote asset.
             $fee += strtoupper((string) ($fill['commissionAsset'] ?? '')) ===
-                strtoupper((string) config('spreadradar.binance_quote_asset', 'USDT'))
+                strtoupper((string) config('luma.binance_quote_asset', 'USDT'))
                 ? $commission
                 : $commission * (float) ($fill['price'] ?? 0);
         }
@@ -212,7 +247,7 @@ class ArbitrageExecutionService
 
     private function guardRateLimit(string $exchange): void
     {
-        $limit = (int) config("spreadradar.api_limits.{$exchange}.requests_per_minute", 60);
+        $limit = (int) config("luma.api_limits.{$exchange}.requests_per_minute", 60);
         if ($limit <= 0) {
             return;
         }
