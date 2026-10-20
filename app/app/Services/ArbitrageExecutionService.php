@@ -214,7 +214,17 @@ class ArbitrageExecutionService
             'API-Sign' => $signature,
         ])->post('https://api.kraken.com' . $path, $data);
         $this->observeResponse('kraken', $path, $response);
-        $response = $response->throw()->json();
+        $payload = $response->json();
+
+        if (!$response->successful()) {
+            throw new RuntimeException(sprintf(
+                'Kraken HTTP %d: %s',
+                $response->status(),
+                is_array($payload) ? json_encode($payload, JSON_UNESCAPED_UNICODE) : $response->body()
+            ));
+        }
+
+        $response = is_array($payload) ? $payload : [];
 
         if (!empty($response['error'])) {
             throw new RuntimeException(implode(', ', $response['error']));
